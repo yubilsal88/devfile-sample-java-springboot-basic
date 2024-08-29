@@ -19,6 +19,9 @@ spec:
             - name: http
               containerPort: 8081
               protocol: TCP
+            - name: http-mng
+              containerPort: 8082
+              protocol: TCP
           resources:
             requests:
               memory: "180Mi"
@@ -34,5 +37,9 @@ spec:
       port: 8081
       protocol: TCP
       targetPort: 8081
+    - name: http-8082
+      port: 8082
+      protocol: TCP
+      targetPort: 8082
   selector:
     app: java-springboot-app
