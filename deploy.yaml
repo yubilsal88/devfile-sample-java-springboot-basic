@@ -1,45 +1,251 @@
-kind: Deployment
-apiVersion: apps/v1
+apiVersion: template.openshift.io/v1
+kind: Template
 metadata:
-  name: my-java-springboot
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: java-springboot-app
-  template:
+  name: java-deployment-template
+parameters:
+  - name: "APP_NAME"
+    description: "The name of the service"
+    value: "test-dev"
+    required: true
+  - name: "APP_NAME_BY_ENVIRONMENT"
+    description: "The name of the service"
+    value: "test-dev"
+  - name: "PROJECT_NAME"
+    description: "The name of the project"
+    value: "yubilsal-dev"
+    required: true
+  - name: "IMAGE_REGISTRY"
+    description: "The docker registry to download image"
+    value: "nexus-st.foobar.com"
+    required: true
+  - name: "IMAGE_VERSION"
+    description: "The version of the image to be deployed"
+    value: "latest"
+    required: true
+  - name: "ENVIRONMENT"
+    description: "The environment that app deployed to"
+    value: "dev"
+    required: true
+  - name: "SERVICE_PORT"
+    description: "The exposed port of the service"
+    value: "8081"
+    required: false
+  - name: "MANAGEMENT_SERVICE_PORT"
+    description: "The exposed port of the service"
+    value: "8082"
+    required: false
+  - name: "CPU_LIMIT"
+    description: "The max core cpu that can be used"
+    value: "500m"
+    required: true
+  - name: "CPU_REQUEST"
+    description: "The core cpu that is dedicates"
+    value: "50m"
+    required: true
+  - name: "HEALTHCHECK_ENDPOINT"
+    description: "The endpoint for health probes"
+    value: "/actuator/health"
+    required: true
+  - name: "MEMORY_LIMIT"
+    description: "The max memory that can be used"
+    value: "1280M"
+    required: true
+  - name: "MEMORY_REQUEST"
+    description: "The memory that is dedicated"
+    value: "512M"
+    required: true
+  - name: "JAVA_OPTIONS"
+    description: "Java Opts to set"
+    value: "-Xmx512M -Dfile.encoding=utf8 -Duser.timezone=GMT+3 -Dspring.profiles.active=dev"
+  - name: "TZ"
+    description: "Timezone for the JVM"
+    value: "Europe/Istanbul"
+    required: true
+  - name: "CONFIG_MOUNT_PATH"
+    description: "Config Mount Path"
+    value: "/deployments/config"
+    required: true
+objects:
+  #DEFAULT
+  - apiVersion: v1
+    kind: DeploymentConfig
+    metadata:
+      creationTimestamp: null
+      generation: 1
+      labels:
+        app: ${APP_NAME}
+        version: ${IMAGE_VERSION}
+      name: ${APP_NAME}
+    spec:
+      replicas: 1
+      selector:
+        app: ${APP_NAME}
+        version: ${IMAGE_VERSION}
+      strategy:
+        activeDeadlineSeconds: 21600
+        resources:
+          limits:
+            cpu: ${CPU_LIMIT}
+            memory: ${MEMORY_LIMIT}
+          requests:
+            cpu: ${CPU_REQUEST}
+            memory: ${MEMORY_REQUEST}
+        rollingParams:
+          intervalSeconds: 1
+          maxSurge: 25%
+          maxUnavailable: 25%
+          timeoutSeconds: 600
+          updatePeriodSeconds: 1
+        type: Rolling
+      template:
+        metadata:
+          labels:
+            app: ${APP_NAME}
+            version: ${IMAGE_VERSION}
+        spec:
+          containers:
+            - image: ${IMAGE_REGISTRY}/${APP_NAME}:${IMAGE_VERSION}
+              imagePullPolicy: Always
+              name: ${APP_NAME}
+              ports:
+                - name: serviceport
+                  containerPort: ${SERVICE_PORT}
+                  protocol: TCP
+                - name: managementport
+                  containerPort: ${MANAGEMENT_SERVICE_PORT}
+                  protocol: TCP
+              env:
+                - name: SPRING_PROFILES_ACTIVE
+                  value: ${ENVIRONMENT}
+                - name: CONFIG_MOUNT_PATH
+                  value: ${CONFIG_MOUNT_PATH}
+                - name: JAVA_OPTIONS
+                  value: ${JAVA_OPTIONS}
+                - name: TZ
+                  value: ${TZ}
+              volumeMounts:
+                - name: ${APP_NAME}-config-mount
+                  readOnly: true
+                  mountPath: ${CONFIG_MOUNT_PATH}
+              livenessProbe:
+                failureThreshold: 5
+                httpGet:
+                  path: ${HEALTHCHECK_ENDPOINT}
+                  port: ${MANAGEMENT_SERVICE_PORT}
+                  scheme: HTTP
+                initialDelaySeconds: 240
+                periodSeconds: 30
+                successThreshold: 1
+                timeoutSeconds: 5
+              readinessProbe:
+                failureThreshold: 20
+                httpGet:
+                  path: ${HEALTHCHECK_ENDPOINT}
+                  port: ${MANAGEMENT_SERVICE_PORT}
+                  scheme: HTTP
+                initialDelaySeconds: 40
+                periodSeconds: 10
+                successThreshold: 1
+                timeoutSeconds: 5
+              resources:
+                limits:
+                  cpu: ${CPU_LIMIT}
+                  memory: ${MEMORY_LIMIT}
+                requests:
+                  cpu: ${CPU_REQUEST}
+                  memory: ${MEMORY_REQUEST}
+          terminationMessagePath: /dev/termination-log
+          dnsPolicy: ClusterFirst
+          restartPolicy: Always
+          securityContext: {}
+          terminationGracePeriodSeconds: 30
+          volumes:
+            - name: ${APP_NAME}-config-mount
+              configMap:
+                name: ${APP_NAME}-config
+        test: false
+        triggers: []
+  - apiVersion: autoscaling/v1
+    kind: HorizontalPodAutoscaler
     metadata:
       labels:
-        app: java-springboot-app
+        app: ${APP_NAME}
+        version: ${IMAGE_VERSION}
+      name: ${APP_NAME}
     spec:
-      containers:
-        - name: my-java-springboot
-          image: java-springboot-image:latest
-          ports:
-            - name: http
-              containerPort: 8081
-              protocol: TCP
-            - name: http-mng
-              containerPort: 8082
-              protocol: TCP
-          resources:
-            requests:
-              memory: "180Mi"
-              cpu: "10m"
----
-kind: Service
-apiVersion: v1
-metadata:
-  name: my-java-springboot-svc
-spec:
-  ports:
-    - name: http-8081
-      port: 8081
-      protocol: TCP
-      targetPort: 8081
-    - name: http-8082
-      port: 8082
-      protocol: TCP
-      targetPort: 8082
-  selector:
-    app: java-springboot-app
+      maxReplicas: 1
+      minReplicas: 1
+      scaleTargetRef:
+        apiVersion: extensions/v1beta1
+        kind: DeploymentConfig
+        name: ${APP_NAME}
+      targetCPUUtilizationPercentage: 1400
+  - kind: Service
+    apiVersion: v1
+    metadata:
+      name: ${APP_NAME}
+      labels:
+        app: ${APP_NAME}
+    spec:
+      ports:
+        - name: http-service
+          protocol: TCP
+          port: ${SERVICE_PORT}
+          targetPort: ${SERVICE_PORT}
+        - name: management
+          protocol: TCP
+          port: ${MANAGEMENT_SERVICE_PORT}
+          targetPort: ${MANAGEMENT_SERVICE_PORT}
+      selector:
+        app: ${APP_NAME}
+  - kind: Route
+    apiVersion: route.openshift.io/v1
+    metadata:
+      name: ${APP_NAME}
+      labels:
+        app: ${APP_NAME}
+    spec:
+      to:
+        kind: Service
+        name: ${APP_NAME}
+        weight: 100
+      port:
+        targetPort: http-service
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+      wildcardPolicy: None
+  - kind: Route
+    apiVersion: route.openshift.io/v1
+    metadata:
+      name: ${APP_NAME}
+      labels:
+        app: ${APP_NAME}
+    spec:
+      to:
+        kind: Service
+        name: ${APP_NAME}
+        weight: 100
+      port:
+        targetPort: management
+      tls:
+        termination: edge
+        insecureEdgeTerminationPolicy: Redirect
+      wildcardPolicy: None
+  - apiVersion: monitoring.coreos.com/v1
+    kind: PodMonitor
+    metadata:
+      name: ${APP_NAME}-monitor
+    spec:
+      podMetricsEndpoints:
+        - path: /actuator/prometheus
+          port: managementport
+          relabelings:
+            - action: replace
+              sourceLabels:
+                - __meta_kubernetes_pod_label_app
+              targetLabel: application
+          scheme: http
+      selector:
+        matchLabels:
+          app: ${APP_NAME}
